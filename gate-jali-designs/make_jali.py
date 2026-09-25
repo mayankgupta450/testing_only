@@ -14,7 +14,7 @@ from shapely.ops import substring, unary_union
 
 # Panel openings in the 1086x1448 source photo: (x0, y0, x1, y1)
 PANELS = {
-    "transom": (250, 236, 825, 348),
+    "transom": (250, 236, 829, 348),
     "square_left": (137, 234, 223, 345),
     "square_right": (854, 242, 940, 353),
     "side_left": (46, 436, 182, 978),
@@ -282,11 +282,127 @@ def tree_of_life(kind, w, h):
     return unary_union(parts)
 
 
+# ---------- lighter, simpler designs ----------
+
+def broken_frame(w, h, inset, width, gap):
+    """Thin frame line broken at the corners so the centre stays attached."""
+    a, b = inset, inset
+    return [
+        slot([(a + gap, b), (w - a - gap, b)], width),
+        slot([(a + gap, h - b), (w - a - gap, h - b)], width),
+        slot([(a, b + gap), (a, h - b - gap)], width),
+        slot([(w - a, b + gap), (w - a, h - b - gap)], width),
+    ]
+
+
+def diamond(cx, cy, rx, ry):
+    return Polygon([(cx - rx, cy), (cx, cy - ry), (cx + rx, cy), (cx, cy + ry)])
+
+
+def frame_diamond(kind, w, h):
+    parts = broken_frame(w, h, 10, 2.2, 9)
+    if kind == "transom":
+        cx, cy = w / 2, h / 2
+        parts.append(diamond(cx, cy, 11, 16))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            parts.append(slot([(cx + dx * 20 + dy * 0, cy + dy * 26), (cx + dx * 34, cy + dy * 38)], 2.0))
+        for fx in (0.25, 0.75):
+            parts.append(diamond(w * fx, cy, 5, 8))
+        for fx in (0.16, 0.34, 0.66, 0.84):
+            parts.append(Point(w * fx, cy).buffer(2.2))
+    elif kind == "square":
+        parts.append(diamond(w / 2, h / 2, 7, 11))
+    else:
+        cx, cy = w / 2, h * 0.55
+        parts.append(diamond(cx, cy, 10, 16))
+        for dy in (-34, 34):
+            parts.append(diamond(cx, cy + dy, 5, 8))
+        for dy in (-58, 58):
+            parts.append(Point(cx, cy + dy).buffer(2.2))
+    return unary_union(parts)
+
+
+def thin_lines(kind, w, h):
+    parts = []
+    if kind == "transom":
+        cx, cy = w / 2, h / 2
+        for i in range(5):
+            y = 18 + i * (h - 36) / 4
+            parts.append(slot([(16, y), (cx - 30, y)], 1.8))
+            parts.append(slot([(cx + 30, y), (w - 16, y)], 1.8))
+        parts.append(Point(cx, cy).buffer(9).difference(Point(cx, cy).buffer(6.5)).difference(box(cx - 1.5, 0, cx + 1.5, h)))
+        parts.append(Point(cx, cy).buffer(2.5))
+    elif kind == "square":
+        for fx in (0.35, 0.5, 0.65):
+            parts.append(slot([(w * fx, 14), (w * fx, h - 14)], 1.8))
+    else:
+        for fx in (0.3, 0.7):
+            parts.append(slot([(w * fx, 16), (w * fx, h - 16)], 1.8))
+        cx, cy = w / 2, h * 0.55
+        parts.append(slot([(cx, 16), (cx, cy - 40)], 1.8))
+        parts.append(slot([(cx, cy + 40), (cx, h - 16)], 1.8))
+        for dy in (-22, 0, 22):
+            parts.append(Point(cx, cy + dy).buffer(2.6))
+    return unary_union(parts)
+
+
+def dot_screen(kind, w, h):
+    parts = []
+    step = 11
+    cx, cy = w / 2, h / 2
+    for j, y in enumerate(np.arange(12, h - 8, step * 0.87)):
+        off = step / 2 if j % 2 else 0
+        for x in np.arange(12 + off, w - 8, step):
+            if kind == "transom":
+                f = 1 - abs(x - cx) / cx  # dots grow toward the centre
+            elif kind == "square":
+                f = 0.45
+            else:
+                if abs(x - cx) > w * 0.2:
+                    continue
+                f = 1 - abs(y - h * 0.55) / (h * 0.5)
+            r = 0.8 + 2.2 * max(0.0, f) ** 1.2
+            if r > 1.0:
+                parts.append(Point(x, y).buffer(r))
+    return unary_union(parts)
+
+
+def sprig(kind, w, h):
+    parts = []
+    def twig(pts, n_leaves, size, width=2.0):
+        stem = slot(pts, width)
+        ls = LineString(pts)
+        out = [stem]
+        for k in range(n_leaves):
+            p = ls.interpolate((k + 0.7) / (n_leaves + 0.4), normalized=True)
+            q = ls.interpolate(min(1, (k + 0.75) / (n_leaves + 0.4)), normalized=True)
+            ang = math.degrees(math.atan2(q.y - p.y, q.x - p.x)) + (40 if k % 2 else -40)
+            out.append(leaf(p.x, p.y, size, ang).difference(stem.buffer(1.2)))
+        return unary_union(out)
+    if kind == "transom":
+        cx, cy = w / 2, h / 2
+        for side in (-1, 1):
+            pts = [(cx + side * t, cy + 10 * math.sin(t / 70 * math.pi)) for t in np.linspace(8, 170, 40)]
+            parts.append(twig(pts, 7, 13))
+        parts.append(Point(cx, cy).buffer(4))
+    elif kind == "square":
+        pts = [(w / 2 + 6 * math.sin(t / 30 * math.pi), h - 12 - t) for t in np.linspace(0, h - 30, 30)]
+        parts.append(twig(pts, 4, 11))
+    else:
+        pts = [(30 + 16 * math.sin(t / 150 * math.pi), h - 14 - t) for t in np.linspace(0, h * 0.55, 50)]
+        parts.append(twig(pts, 9, 17, 2.4))
+    return unary_union(parts)
+
+
 DESIGNS = {
     "1-geometric-jaali": geometric,
     "2-lotus-mandala": lotus,
     "3-modern-minimal": minimal,
     "4-tree-of-life-peacock": tree_of_life,
+    "5-simple-frame-diamond": frame_diamond,
+    "6-simple-thin-lines": thin_lines,
+    "7-simple-dot-screen": dot_screen,
+    "8-simple-leaf-sprig": sprig,
 }
 
 
